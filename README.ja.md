@@ -1,4 +1,4 @@
-# elf2x68k XDF/HDF Sample
+# elf2x68k .xdf/.hdf Sample
 
 [English](README.md) | [日本語](README.ja.md)
 
@@ -19,7 +19,7 @@
 - 起動可能な SASI `.hdf` ハードディスクイメージの生成
 
 Makefile はビルド時に公式 Human68k 3.02 配布物を取得し、
-[XDFtool](https://github.com/yunkya2/x68kmisc/tree/main/xdftool) を使って
+[xdftool](https://github.com/yunkya2/x68kmisc/tree/main/xdftool) を使って
 ディスクイメージを生成します。
 
 ## リポジトリ構成
@@ -59,9 +59,9 @@ sudo apt install make curl unar python3
 `unar` は公式 Human68k の LZH アーカイブを展開するために使用します。
 アーカイブ内の日本語ファイル名は Shift_JIS として解釈します。
 
-## XDF サンプル
+## .xdf サンプル
 
-`samples/hello` は最小構成の XDF 生成例です。
+`samples/hello` は最小構成の .xdf 生成例です。
 
 ```sh
 cd samples/hello
@@ -88,7 +88,7 @@ Makefile は `AUTOEXEC.BAT` も更新し、Human68k 起動後に `hello.x` が
 make check-xdf
 ```
 
-## HDF サンプル
+## .hdf サンプル
 
 `samples/teapot` は起動可能な SASI ハードディスクイメージを生成する例です。
 
@@ -105,7 +105,7 @@ teapot.hdf
 teapot.zip
 ```
 
-HDF は XDFtool の `/h10` 形式を使用し、10 MB の SASI ハードディスク
+.hdf は xdftool の `/h10` 形式を使用し、10 MB の SASI ハードディスク
 イメージとして生成されます。
 
 生成したイメージの内容は次のコマンドで確認できます。
@@ -138,7 +138,7 @@ Human68k のファイル一式
    | アプリケーションを追加
    | AUTOEXEC.BAT を更新
    v
-起動可能な XDF / HDF
+起動可能な .xdf / .hdf
 ```
 
 公式 Human68k 3.02 配布物は次の場所からビルド時に取得します。
@@ -151,7 +151,7 @@ Human68k 自体はこのリポジトリには含めていません。
 
 ## Human68k の再配布条件
 
-生成される XDF/HDF には Human68k のファイルが含まれます。
+生成される .xdf/.hdf には Human68k のファイルが含まれます。
 
 生成したイメージを再配布する場合は、公式 Human68k 3.02 配布物に含まれる
 許諾条件を確認し、その条件に従ってください。
@@ -178,10 +178,9 @@ make distclean
 
 - [elf2x68k](https://github.com/yunkya2/elf2x68k)
 - [elf2x68k-sample](https://github.com/yunkya2/elf2x68k-sample)
-- [XDFtool / x68kmisc](https://github.com/yunkya2/x68kmisc/tree/main/xdftool)
-- [miniglut-x68k](https://github.com/renatus-novus-x/miniglut-x68k)
+- [xdftool / x68kmisc](https://github.com/yunkya2/x68kmisc/tree/main/xdftool)
 - [Human68k 3.02](http://retropc.net/x68000/software/sharp/human302/)
 
 ## 謝辞
 
-elf2x68k、XDFtool の作者・コントリビューター、および X68000 コミュニティの皆様に感謝します。
+elf2x68k、xdftool の作者・コントリビューター、および X68000 コミュニティの皆様に感謝します。

@@ -1,4 +1,4 @@
-# elf2x68k XDF/HDF Sample
+# elf2x68k .xdf/.hdf Sample
 
 [English](README.md) | [日本語](README.ja.md)
 
@@ -20,7 +20,7 @@ The repository demonstrates two simple workflows:
 - creating a bootable SASI `.hdf` hard disk image
 
 The Makefiles download the official Human68k 3.02 distribution at build time
-and use [XDFtool](https://github.com/yunkya2/x68kmisc/tree/main/xdftool) to
+and use [xdftool](https://github.com/yunkya2/x68kmisc/tree/main/xdftool) to
 create the disk images.
 
 ## Repository layout
@@ -60,9 +60,9 @@ sudo apt install make curl unar python3
 `unar` is used to extract the official Human68k LZH archive while interpreting
 the archived Japanese filenames as Shift_JIS.
 
-## XDF sample
+## .xdf sample
 
-The `samples/hello` directory contains a minimal XDF example.
+The `samples/hello` directory contains a minimal .xdf example.
 
 ```sh
 cd samples/hello
@@ -87,7 +87,7 @@ To inspect the generated image:
 make check-xdf
 ```
 
-## HDF sample
+## .hdf sample
 
 The `samples/teapot` directory demonstrates creation of a bootable SASI hard
 disk image.
@@ -105,7 +105,7 @@ teapot.hdf
 teapot.zip
 ```
 
-The HDF uses XDFtool's `/h10` format and is generated as a 10 MB SASI hard
+The .hdf uses xdftool's `/h10` format and is generated as a 10 MB SASI hard
 disk image.
 
 To inspect the generated image:
@@ -138,7 +138,7 @@ Human68k files
    | add application files
    | update AUTOEXEC.BAT
    v
-bootable XDF / HDF
+bootable .xdf / .hdf
 ```
 
 The official Human68k 3.02 archive is downloaded from:
@@ -151,7 +151,7 @@ Human68k itself is not stored in this repository.
 
 ## Human68k distribution terms
 
-Generated XDF/HDF images contain Human68k files.
+Generated .xdf/.hdf images contain Human68k files.
 
 Before redistributing generated images, please read and follow the
 distribution terms included in the official Human68k 3.02 archive.
@@ -177,11 +177,10 @@ make distclean
 
 - [elf2x68k](https://github.com/yunkya2/elf2x68k)
 - [elf2x68k-sample](https://github.com/yunkya2/elf2x68k-sample)
-- [XDFtool / x68kmisc](https://github.com/yunkya2/x68kmisc/tree/main/xdftool)
-- [miniglut-x68k](https://github.com/renatus-novus-x/miniglut-x68k)
+- [xdftool / x68kmisc](https://github.com/yunkya2/x68kmisc/tree/main/xdftool)
 - [Human68k 3.02](http://retropc.net/x68000/software/sharp/human302/)
 
 ## Acknowledgements
 
-Thanks to the authors and contributors of elf2x68k and XDFtool, and to the
+Thanks to the authors and contributors of elf2x68k and xdftool, and to the
 X68000 community.
