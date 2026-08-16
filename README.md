@@ -3,7 +3,7 @@
 [English](README.md) | [日本語](README.ja.md)
 
 <p align="center">
-  <img src="images/teapot.png" alt="X68000 / Human68k sample" width="640">
+  <img src="images/teapot.png" alt="X68000 / Human68k sample" width="256" height="256">
 </p>
 
 <p align="center">
