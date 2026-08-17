@@ -73,6 +73,13 @@
  */
 #define CENTISEC_PER_DAY 8640000L
 
+/* Timeout for V-DISP wait (centiseconds). */
+#define WAIT_VDISP_TIMEOUT_CS 100
+
+static long ontime_diff_cs(
+    struct iocs_time start,
+    struct iocs_time end);
+
 
 /* ------------------------------------------------------------
  * Saved CRTC state
@@ -114,19 +121,38 @@ static void write_crtc(void *addr, uint16_t value)
  * One return from this function corresponds to one frame.
  * ============================================================ */
 
-static void wait_vdisp(void)
+static int wait_vdisp_with_timeout(long timeout_cs)
 {
-    /*
-     * Wait until V-DISP goes low.
-     */
-    while ((read_gpip() & GPIP_VDISP) != 0) {
+    struct iocs_time start;
+    struct iocs_time now;
+    uint8_t gpip;
+
+    start = _iocs_ontime();
+    gpip = read_gpip();
+
+    while ((gpip & GPIP_VDISP) != 0) {
+        gpip = read_gpip();
+        now = _iocs_ontime();
+        if (ontime_diff_cs(start, now) > timeout_cs) {
+            return -1;
+        }
     }
 
-    /*
-     * Wait until V-DISP goes high again.
-     */
-    while ((read_gpip() & GPIP_VDISP) == 0) {
+    while ((gpip & GPIP_VDISP) == 0) {
+        gpip = read_gpip();
+        now = _iocs_ontime();
+        if (ontime_diff_cs(start, now) > timeout_cs) {
+            return -1;
+        }
     }
+
+    return 0;
+}
+
+
+static int wait_vdisp(void)
+{
+    return wait_vdisp_with_timeout(WAIT_VDISP_TIMEOUT_CS);
 }
 
 
@@ -159,9 +185,11 @@ static void save_crtc_vertical(void)
  *
  * 31,500 / 525 = 60 Hz
  */
-static void set_60hz(void)
+static int set_60hz(void)
 {
-    wait_vdisp();
+    if (wait_vdisp() != 0) {
+        return -1;
+    }
 
     /*
      * Set positions first while the old larger total
@@ -177,13 +205,13 @@ static void set_60hz(void)
      * 525 - 1 = 524 = 0x020C
      */
     write_crtc(CRTC_R04, 0x020C);
+
+    return 0;
 }
 
 
-static void restore_crtc(void)
+static void restore_crtc_now(void)
 {
-    wait_vdisp();
-
     /*
      * Restore the total period first.
      */
@@ -192,6 +220,34 @@ static void restore_crtc(void)
     write_crtc(CRTC_R05, saved_r05);
     write_crtc(CRTC_R06, saved_r06);
     write_crtc(CRTC_R07, saved_r07);
+}
+
+
+static int is_reasonable_mode(int mode)
+{
+    return (mode >= 0) && (mode <= 0x7f);
+}
+
+
+static int restore_mode_and_crtc(int old_mode)
+{
+    int mode;
+
+    if (!is_reasonable_mode(old_mode)) {
+        mode = 12;
+    } else {
+        mode = old_mode;
+    }
+
+    _iocs_crtmod(mode);
+
+    if (mode == 12) {
+        restore_crtc_now();
+    }
+
+    _iocs_g_clr_on();
+
+    return 0;
 }
 
 
@@ -448,7 +504,12 @@ int main(void)
      * Change to 525-line timing
      * -------------------------------------------------------- */
 
-    set_60hz();
+    if (set_60hz() != 0) {
+        aborted = 1;
+        put_line(
+            3,
+            "V-DISP timeout at 60Hz setup");
+    }
 
 
     /* --------------------------------------------------------
@@ -516,13 +577,19 @@ int main(void)
      * First wait for a frame boundary.
      * -------------------------------------------------------- */
 
-    wait_vdisp();
-
-
-    /*
-     * Read IOCS uptime immediately after the boundary.
-     */
-    start_time = _iocs_ontime();
+    if (!aborted) {
+        if (wait_vdisp() != 0) {
+            aborted = 1;
+            put_line(
+                3,
+                "V-DISP timeout at start");
+        } else {
+            /*
+             * Read IOCS uptime immediately after the boundary.
+             */
+            start_time = _iocs_ontime();
+        }
+    }
 
 
     /* ========================================================
@@ -530,13 +597,19 @@ int main(void)
      * ======================================================== */
 
     for (frame = 1;
-         frame <= MEASURE_FRAMES;
+         (frame <= MEASURE_FRAMES) && (aborted == 0);
          ++frame) {
 
         /*
          * Wait for next frame.
          */
-        wait_vdisp();
+        if (wait_vdisp() != 0) {
+            aborted = 1;
+            put_line(
+                7,
+                "V-DISP timeout during measurement");
+            break;
+        }
 
 
         /*
@@ -692,7 +765,9 @@ int main(void)
          */
         for (;;) {
 
-            wait_vdisp();
+            if (wait_vdisp() != 0) {
+                break;
+            }
 
             if (escape_pressed()) {
                 break;
@@ -705,14 +780,7 @@ int main(void)
      * Restore original video state
      * ======================================================== */
 
-    restore_crtc();
-
-
-    _iocs_crtmod(
-        old_mode);
-
-
-    _iocs_g_clr_on();
+    restore_mode_and_crtc(old_mode);
 
 
     /* ========================================================
