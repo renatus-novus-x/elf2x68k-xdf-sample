@@ -15,7 +15,6 @@
  *     approximately 60 Hz
  *
  * - Wait for V-DISP once per frame
- * - Animate a simple rectangle
  * - Measure 600 V-DISP periods using IOCS _ONTIME
  *
  * ESC: abort / exit
@@ -50,6 +49,7 @@
  * ------------------------------------------------------------ */
 
 #define SCREEN_WIDTH   512
+#define SCREEN_HEIGHT  512
 
 #define COLOR_BLACK    0x0000
 #define COLOR_WHITE    0xFFFF
@@ -62,6 +62,16 @@
  * ------------------------------------------------------------ */
 
 #define MEASURE_FRAMES 600
+
+/*
+ * UI / measurement timing
+ *   - Update FPS text every 0.2 sec (20 centiseconds).
+ *   - Flow line is rendered at about 30Hz (update every 2 frames).
+ */
+#define FPS_UPDATE_INTERVAL_CS        20
+#define FLOW_UPDATE_EVERY_FRAMES      2
+#define FLOW_SWEEP_STEPS              30
+#define FLOW_LINE_HEIGHT             1
 
 /*
  * IOCS _ONTIME:
@@ -455,17 +465,18 @@ int main(void)
 
     int frame;
 
-    int x;
-    int dx;
-
-    int phase;
-
-    int heartbeat;
-
     int aborted;
 
     struct iocs_time start_time;
     struct iocs_time end_time;
+    struct iocs_time fps_time;
+    struct iocs_time now_time;
+
+    int fps_count;
+    long fps_elapsed_cs;
+    int flow_prev_y;
+    int flow_step;
+    long last_fps_x100;
 
     long elapsed_cs;
     long hz_x100;
@@ -501,8 +512,10 @@ int main(void)
 
 
     /* --------------------------------------------------------
-     * Change to 525-line timing
+    * Change to 525-line timing
      * -------------------------------------------------------- */
+
+    aborted = 0;
 
     if (set_60hz() != 0) {
         aborted = 1;
@@ -529,6 +542,10 @@ int main(void)
         "Progress   : 0 / 600");
 
     put_line(
+        5,
+        "FPS   : --");
+
+    put_line(
         7,
         "ESC : abort");
 
@@ -537,45 +554,19 @@ int main(void)
      * Animation state
      * -------------------------------------------------------- */
 
-    x = 32;
-    dx = 2;
-
-    phase = 0;
-
-    heartbeat = 0;
-
-    aborted = 0;
+    fps_count = 0;
+    flow_step = 0;
+    flow_prev_y = -1;
+    last_fps_x100 = -1;
 
     elapsed_cs = 0;
 
 
     /*
-     * Moving rectangle.
-     */
-    fill_rect(
-        x,
-        180,
-        32,
-        32,
-        COLOR_WHITE);
-
-
-    /*
-     * 60-frame phase indicator.
-     */
-    fill_rect(
-        16,
-        80,
-        6,
-        16,
-        COLOR_WHITE);
-
-
-    /* --------------------------------------------------------
      * Synchronize measurement start
      *
      * First wait for a frame boundary.
-     * -------------------------------------------------------- */
+     */
 
     if (!aborted) {
         if (wait_vdisp() != 0) {
@@ -588,6 +579,7 @@ int main(void)
              * Read IOCS uptime immediately after the boundary.
              */
             start_time = _iocs_ontime();
+            fps_time = start_time;
         }
     }
 
@@ -625,92 +617,73 @@ int main(void)
         }
 
 
-        /* ----------------------------------------------------
-         * Erase previous frame
-         * ---------------------------------------------------- */
+        /*
+         * Flow line:
+         * - Draw at about 30Hz (one update every 2 frames).
+         * - 30 updates per sweep => about 1 second at 60Hz.
+         */
+        if ((frame % FLOW_UPDATE_EVERY_FRAMES) == 0) {
+            int flow_phase;
+            int flow_y;
 
-        fill_rect(
-            x,
-            180,
-            32,
-            32,
-            COLOR_BLACK);
+            ++flow_step;
 
+            flow_phase = flow_step % FLOW_SWEEP_STEPS;
+            flow_y = (flow_phase * SCREEN_HEIGHT) / FLOW_SWEEP_STEPS;
 
-        fill_rect(
-            16 + phase * 8,
-            80,
-            6,
-            16,
-            COLOR_BLACK);
+            if (flow_prev_y >= 0 && flow_prev_y != flow_y) {
+                fill_rect(
+                    0,
+                    flow_prev_y,
+                    SCREEN_WIDTH,
+                    FLOW_LINE_HEIGHT,
+                    COLOR_BLACK);
+            }
 
+            fill_rect(
+                0,
+                flow_y,
+                SCREEN_WIDTH,
+                FLOW_LINE_HEIGHT,
+                COLOR_WHITE);
 
-        /* ----------------------------------------------------
-         * Update moving rectangle
-         * ---------------------------------------------------- */
-
-        x += dx;
-
-        if (x >= SCREEN_WIDTH - 32) {
-
-            x = SCREEN_WIDTH - 32;
-            dx = -2;
-
-        } else if (x <= 0) {
-
-            x = 0;
-            dx = 2;
+            flow_prev_y = flow_y;
         }
-
-
-        /* ----------------------------------------------------
-         * 60-frame phase counter
-         * ---------------------------------------------------- */
-
-        ++phase;
-
-        if (phase >= 60) {
-
-            phase = 0;
-
-            /*
-             * Toggle once per 60 frames.
-             */
-            heartbeat = !heartbeat;
-        }
-
-
-        /* ----------------------------------------------------
-         * Draw current frame
-         * ---------------------------------------------------- */
-
-        fill_rect(
-            x,
-            180,
-            32,
-            32,
-            COLOR_WHITE);
-
-
-        fill_rect(
-            16 + phase * 8,
-            80,
-            6,
-            16,
-            COLOR_WHITE);
 
 
         /*
-         * 1-second heartbeat.
+         * FPS text update every 0.2 second.
          */
-        fill_rect(
-            240,
-            300,
-            32,
-            32,
-            heartbeat
-                ? COLOR_WHITE
-                : COLOR_BLACK);
+        now_time = _iocs_ontime();
+        ++fps_count;
+
+        fps_elapsed_cs = ontime_diff_cs(fps_time, now_time);
+
+        if (fps_elapsed_cs >= FPS_UPDATE_INTERVAL_CS) {
+
+            long fps_x100;
+
+            fps_x100 =
+                ((long)fps_count * 10000L + fps_elapsed_cs / 2L)
+                / fps_elapsed_cs;
+
+            if (fps_x100 != last_fps_x100) {
+                sprintf(
+                    buf,
+                    "FPS : %ld.%02ld",
+                    fps_x100 / 100,
+                    fps_x100 % 100);
+
+                put_line(
+                    5,
+                    buf);
+
+                last_fps_x100 = fps_x100;
+            }
+
+            fps_time = now_time;
+            fps_count = 0;
+        }
 
 
         /* ----------------------------------------------------
