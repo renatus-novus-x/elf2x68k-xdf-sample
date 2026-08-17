@@ -322,6 +322,22 @@ static void put_line(int row, const char *text)
 }
 
 
+static void hide_console_cursor(void)
+{
+    /* Stop cursor blinking, then remove the cursor image. */
+    _iocs_b_curoff();
+    _iocs_os_curof();
+}
+
+
+static void restore_console_cursor(void)
+{
+    /* Restore the cursor image and its normal blinking. */
+    _iocs_os_curon();
+    _iocs_b_curon();
+}
+
+
 /* ============================================================
  * Keyboard
  * ============================================================ */
@@ -490,6 +506,8 @@ int main(void)
 
     old_mode = _iocs_crtmod(-1);
 
+    hide_console_cursor();
+
 
     /* --------------------------------------------------------
      * IOCS mode 12
@@ -605,6 +623,16 @@ int main(void)
 
 
         /*
+         * Check ESC before drawing.  No new flow line is rendered
+         * on the frame used to leave the measurement loop.
+         */
+        if (escape_pressed()) {
+            aborted = 1;
+            break;
+        }
+
+
+        /*
          * At frame #600, capture the end time
          * immediately after V-DISP.
          *
@@ -705,15 +733,24 @@ int main(void)
         }
 
 
-        /* ----------------------------------------------------
-         * ESC = abort
-         * ---------------------------------------------------- */
+    }
 
-        if (escape_pressed()) {
 
-            aborted = 1;
-            break;
-        }
+    /*
+     * The animation ends with the measurement.  Remove its final
+     * flow line before displaying the result screen, then allow one
+     * V-DISP boundary for the cleared line to become visible.
+     */
+    if (flow_prev_y >= 0) {
+        fill_rect(
+            0,
+            flow_prev_y,
+            SCREEN_WIDTH,
+            FLOW_LINE_HEIGHT,
+            COLOR_BLACK);
+
+        flow_prev_y = -1;
+        (void)wait_vdisp();
     }
 
 
@@ -753,7 +790,29 @@ int main(void)
      * Restore original video state
      * ======================================================== */
 
+    /*
+     * Remove the flow line explicitly, then clear the complete test
+     * graphics screen.  XM6 TypeG and XEiJ may not expose the clear
+     * result before an immediate CRTC/mode change, so keep the test
+     * timing active until one more V-DISP boundary has passed.
+     */
+    if (flow_prev_y >= 0) {
+        fill_rect(
+            0,
+            flow_prev_y,
+            SCREEN_WIDTH,
+            FLOW_LINE_HEIGHT,
+            COLOR_BLACK);
+    }
+
+    _iocs_g_clr_on();
+
+    /* Always continue with restoration if synchronization times out. */
+    (void)wait_vdisp();
+
     restore_mode_and_crtc(old_mode);
+
+    restore_console_cursor();
 
 
     /* ========================================================
