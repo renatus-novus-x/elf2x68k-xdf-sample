@@ -88,6 +88,16 @@ Makefile は `AUTOEXEC.BAT` も更新し、Human68k 起動後に `hello.x` が
 make check-xdf
 ```
 
+## CRTC 60 Hz サンプル
+
+`samples/crtc60hz` は IOCS mode 12 の垂直タイミングを約 60 Hz に変更し、
+600 回の V-DISP 周期を IOCS `_ONTIME` で測定する例です。終了時には元の
+画面状態へ復帰します。
+
+```sh
+cd samples/crtc60hz
+make
+```
 ## .hdf サンプル
 
 `samples/teapot` は起動可能な SASI ハードディスクイメージを生成する例です。

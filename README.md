@@ -87,6 +87,16 @@ To inspect the generated image:
 make check-xdf
 ```
 
+## CRTC 60 Hz sample
+
+The `samples/crtc60hz` directory changes IOCS mode 12 to approximately 60 Hz,
+measures 600 V-DISP periods with IOCS `_ONTIME`, and restores the original
+video state on exit.
+
+```sh
+cd samples/crtc60hz
+make
+```
 ## .hdf sample
 
 The `samples/teapot` directory demonstrates creation of a bootable SASI hard
