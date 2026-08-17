@@ -1,0 +1,8 @@
+build/
+**/build/
+*.o
+*.elf
+*.x
+*.xdf
+*.zip
+*.hdf

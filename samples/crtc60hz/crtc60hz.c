@@ -3,27 +3,13 @@
 #include <string.h>
 #include <x68k/iocs.h>
 
-/* ============================================================
- * X68000 CRTC 60 Hz test
- *
- * - Start from IOCS mode 12:
- *     512 x 512 / 65536 colors / 31 kHz
- *
- * - Change vertical timing to:
- *     525 total lines
- *     480 visible lines
- *     approximately 60 Hz
- *
- * - Wait for V-DISP once per frame
- * - Measure 600 V-DISP periods using IOCS _ONTIME
- *
- * ESC: abort / exit
- * ============================================================ */
 
-
-/* ------------------------------------------------------------
- * X68000 hardware addresses
- * ------------------------------------------------------------ */
+/*
+ * X68000 CRTC 60 Hz V-DISP measurement.
+ *
+ * Starts from IOCS mode 12, changes only the vertical timing,
+ * and measures 600 frames with IOCS _ONTIME.
+ */
 
 #define CRTC_R04       ((void *)0x00E80008UL)
 #define CRTC_R05       ((void *)0x00E8000AUL)
@@ -32,21 +18,8 @@
 
 #define MFP_GPIP       ((const void *)0x00E88001UL)
 
-/*
- * MFP GPIP bit 4 = V-DISP
- *
- * IMPORTANT:
- *   V-DISP is 0x10, not 0x40.
- *
- *   bit 4 = V-DISP
- *   bit 6 = CIRQ
- */
+/* MFP GPIP bit 4 is V-DISP. Bit 6 (0x40) is CIRQ. */
 #define GPIP_VDISP     0x10
-
-
-/* ------------------------------------------------------------
- * Screen
- * ------------------------------------------------------------ */
 
 #define SCREEN_WIDTH   512
 #define SCREEN_HEIGHT  512
@@ -56,44 +29,19 @@
 
 #define ESC_SCANCODE   0x01
 
-
-/* ------------------------------------------------------------
- * Measurement
- * ------------------------------------------------------------ */
-
 #define MEASURE_FRAMES 600
 
-/*
- * UI / measurement timing
- *   - Update FPS text every 0.2 sec (20 centiseconds).
- *   - Flow line is rendered at about 30Hz (update every 2 frames).
- */
+/* Update FPS every 0.2 seconds and the flow line every two frames. */
 #define FPS_UPDATE_INTERVAL_CS        20
 #define FLOW_UPDATE_EVERY_FRAMES      2
 #define FLOW_SWEEP_STEPS              30
-#define FLOW_LINE_HEIGHT             1
+#define FLOW_LINE_HEIGHT               1
 
-/*
- * IOCS _ONTIME:
- *
- * sec = elapsed time within one day,
- *       in 1/100 second units.
- *
- * 24 * 60 * 60 * 100 = 8,640,000
- */
+/* _ONTIME sec uses centiseconds and wraps once per day. */
 #define CENTISEC_PER_DAY 8640000L
 
-/* Timeout for V-DISP wait (centiseconds). */
 #define WAIT_VDISP_TIMEOUT_CS 100
 
-static long ontime_diff_cs(
-    struct iocs_time start,
-    struct iocs_time end);
-
-
-/* ------------------------------------------------------------
- * Saved CRTC state
- * ------------------------------------------------------------ */
 
 static uint16_t saved_r04;
 static uint16_t saved_r05;
@@ -101,748 +49,466 @@ static uint16_t saved_r06;
 static uint16_t saved_r07;
 
 
-/* ============================================================
- * Low level access
- * ============================================================ */
+static long ontime_diff_cs(
+  struct iocs_time start,
+  struct iocs_time end);
+
 
 static uint8_t read_gpip(void)
 {
-    return (uint8_t)_iocs_b_bpeek(MFP_GPIP);
+  return (uint8_t)_iocs_b_bpeek(MFP_GPIP);
 }
 
 
 static uint16_t read_crtc(const void *addr)
 {
-    return (uint16_t)_iocs_b_wpeek(addr);
+  return (uint16_t)_iocs_b_wpeek(addr);
 }
 
 
 static void write_crtc(void *addr, uint16_t value)
 {
-    _iocs_b_wpoke(addr, value);
+  _iocs_b_wpoke(addr, value);
 }
 
 
-/* ============================================================
- * V-DISP synchronization
- *
- * Wait for one complete V-DISP edge sequence.
- *
- * One return from this function corresponds to one frame.
- * ============================================================ */
-
+/* Wait for one complete V-DISP edge sequence. */
 static int wait_vdisp_with_timeout(long timeout_cs)
 {
-    struct iocs_time start;
-    struct iocs_time now;
-    uint8_t gpip;
+  struct iocs_time start;
+  struct iocs_time now;
+  uint8_t gpip;
 
-    start = _iocs_ontime();
+  start = _iocs_ontime();
+  gpip = read_gpip();
+
+  while ((gpip & GPIP_VDISP) != 0) {
     gpip = read_gpip();
+    now = _iocs_ontime();
 
-    while ((gpip & GPIP_VDISP) != 0) {
-        gpip = read_gpip();
-        now = _iocs_ontime();
-        if (ontime_diff_cs(start, now) > timeout_cs) {
-            return -1;
-        }
+    if (ontime_diff_cs(start, now) > timeout_cs) {
+      return -1;
     }
+  }
 
-    while ((gpip & GPIP_VDISP) == 0) {
-        gpip = read_gpip();
-        now = _iocs_ontime();
-        if (ontime_diff_cs(start, now) > timeout_cs) {
-            return -1;
-        }
+  while ((gpip & GPIP_VDISP) == 0) {
+    gpip = read_gpip();
+    now = _iocs_ontime();
+
+    if (ontime_diff_cs(start, now) > timeout_cs) {
+      return -1;
     }
+  }
 
-    return 0;
+  return 0;
 }
 
 
 static int wait_vdisp(void)
 {
-    return wait_vdisp_with_timeout(WAIT_VDISP_TIMEOUT_CS);
+  return wait_vdisp_with_timeout(WAIT_VDISP_TIMEOUT_CS);
 }
 
 
-/* ============================================================
- * CRTC
- * ============================================================ */
-
 static void save_crtc_vertical(void)
 {
-    saved_r04 = read_crtc(CRTC_R04);
-    saved_r05 = read_crtc(CRTC_R05);
-    saved_r06 = read_crtc(CRTC_R06);
-    saved_r07 = read_crtc(CRTC_R07);
+  saved_r04 = read_crtc(CRTC_R04);
+  saved_r05 = read_crtc(CRTC_R05);
+  saved_r06 = read_crtc(CRTC_R06);
+  saved_r07 = read_crtc(CRTC_R07);
 }
 
 
 /*
- * Change vertical timing to approximately 60 Hz.
- *
- * Horizontal frequency remains approximately 31.5 kHz.
- *
- * Vertical:
- *
- *   VSYNC        2 lines
- *   back porch  33 lines
- *   display    480 lines
- *   front porch 10 lines
- *               ---------
- *   total      525 lines
- *
- * 31,500 / 525 = 60 Hz
+ * Set 525 total lines with 480 visible lines.
+ * 31.5 kHz / 525 lines is approximately 60 Hz.
  */
 static int set_60hz(void)
 {
-    if (wait_vdisp() != 0) {
-        return -1;
-    }
+  if (wait_vdisp() != 0) {
+    return -1;
+  }
 
-    /*
-     * Set positions first while the old larger total
-     * line count is still active.
-     */
-    write_crtc(CRTC_R05, 0x0001);
-    write_crtc(CRTC_R06, 0x0022);
-    write_crtc(CRTC_R07, 0x0202);
+  /* Set display positions before reducing the total line count. */
+  write_crtc(CRTC_R05, 0x0001);
+  write_crtc(CRTC_R06, 0x0022);
+  write_crtc(CRTC_R07, 0x0202);
 
-    /*
-     * R04 = total lines - 1
-     *
-     * 525 - 1 = 524 = 0x020C
-     */
-    write_crtc(CRTC_R04, 0x020C);
+  /* R04 is total lines minus one: 525 - 1 = 0x020c. */
+  write_crtc(CRTC_R04, 0x020C);
 
-    return 0;
+  return 0;
 }
 
 
 static void restore_crtc_now(void)
 {
-    /*
-     * Restore the total period first.
-     */
-    write_crtc(CRTC_R04, saved_r04);
-
-    write_crtc(CRTC_R05, saved_r05);
-    write_crtc(CRTC_R06, saved_r06);
-    write_crtc(CRTC_R07, saved_r07);
+  /* Restore the total period before the display positions. */
+  write_crtc(CRTC_R04, saved_r04);
+  write_crtc(CRTC_R05, saved_r05);
+  write_crtc(CRTC_R06, saved_r06);
+  write_crtc(CRTC_R07, saved_r07);
 }
 
 
 static int is_reasonable_mode(int mode)
 {
-    return (mode >= 0) && (mode <= 0x7f);
+  return (mode >= 0) && (mode <= 0x7f);
 }
 
 
 static int restore_mode_and_crtc(int old_mode)
 {
-    int mode;
+  int mode;
 
-    if (!is_reasonable_mode(old_mode)) {
-        mode = 12;
-    } else {
-        mode = old_mode;
-    }
+  if (!is_reasonable_mode(old_mode)) {
+    mode = 12;
+  } else {
+    mode = old_mode;
+  }
 
-    _iocs_crtmod(mode);
+  _iocs_crtmod(mode);
 
-    if (mode == 12) {
-        restore_crtc_now();
-    }
+  if (mode == 12) {
+    restore_crtc_now();
+  }
 
-    _iocs_g_clr_on();
+  _iocs_g_clr_on();
 
-    return 0;
+  return 0;
 }
 
-
-/* ============================================================
- * Graphics
- * ============================================================ */
 
 static void fill_rect(
-    int x,
-    int y,
-    int width,
-    int height,
-    uint16_t color)
+  int x,
+  int y,
+  int width,
+  int height,
+  uint16_t color)
 {
-    struct iocs_fillptr rect;
+  struct iocs_fillptr rect;
 
-    rect.x1 = (short)x;
-    rect.y1 = (short)y;
-    rect.x2 = (short)(x + width - 1);
-    rect.y2 = (short)(y + height - 1);
-    rect.color = color;
+  rect.x1 = (short)x;
+  rect.y1 = (short)y;
+  rect.x2 = (short)(x + width - 1);
+  rect.y2 = (short)(y + height - 1);
+  rect.color = color;
 
-    _iocs_fill(&rect);
+  _iocs_fill(&rect);
 }
 
-
-/* ============================================================
- * Text output
- * ============================================================ */
 
 static void put_line(int row, const char *text)
 {
-    char line[61];
-    size_t len;
+  char line[61];
+  size_t len;
 
-    /*
-     * Clear the complete line first.
-     */
-    memset(line, ' ', 60);
-    line[60] = '\0';
+  memset(line, ' ', 60);
+  line[60] = '\0';
 
-    len = strlen(text);
+  len = strlen(text);
 
-    if (len > 60) {
-        len = 60;
-    }
+  if (len > 60) {
+    len = 60;
+  }
 
-    memcpy(line, text, len);
+  memcpy(line, text, len);
 
-    /*
-     * color = 3
-     * x     = 2
-     * y     = row
-     * width = 60 chars
-     */
-    _iocs_b_putmes(
-        3,
-        2,
-        row,
-        59,
-        line);
+  _iocs_b_putmes(
+    3,
+    2,
+    row,
+    59,
+    line);
 }
 
 
 static void hide_console_cursor(void)
 {
-    /* Stop cursor blinking, then remove the cursor image. */
-    _iocs_b_curoff();
-    _iocs_os_curof();
+  _iocs_b_curoff();
+  _iocs_os_curof();
 }
 
 
 static void restore_console_cursor(void)
 {
-    /* Restore the cursor image and its normal blinking. */
-    _iocs_os_curon();
-    _iocs_b_curon();
+  _iocs_os_curon();
+  _iocs_b_curon();
 }
 
-
-/* ============================================================
- * Keyboard
- * ============================================================ */
 
 static int escape_pressed(void)
 {
-    int key;
-    int scancode;
+  int key;
+  int scancode;
 
-    /*
-     * Do not call B_KEYINP unless a key is available.
-     */
-    if (_iocs_b_keysns() == 0) {
-        return 0;
-    }
+  if (_iocs_b_keysns() == 0) {
+    return 0;
+  }
 
-    key = _iocs_b_keyinp();
+  key = _iocs_b_keyinp();
+  scancode = (key >> 8) & 0xFF;
 
-    scancode = (key >> 8) & 0xFF;
-
-    return scancode == ESC_SCANCODE;
+  return scancode == ESC_SCANCODE;
 }
 
-
-/* ============================================================
- * IOCS _ONTIME helpers
- * ============================================================ */
 
 static long ontime_diff_cs(
-    struct iocs_time start,
-    struct iocs_time end)
+  struct iocs_time start,
+  struct iocs_time end)
 {
-    long day_diff;
-    long diff;
+  long day_diff;
+  long diff;
 
-    day_diff =
-        (long)end.day - (long)start.day;
+  day_diff = (long)end.day - (long)start.day;
+  diff = day_diff * CENTISEC_PER_DAY
+    + (long)end.sec
+    - (long)start.sec;
 
-    diff =
-        day_diff * CENTISEC_PER_DAY
-        + (long)end.sec
-        - (long)start.sec;
-
-    return diff;
+  return diff;
 }
 
 
-/*
- * Return measured frequency * 100.
- *
- * Example:
- *
- *     60.00 Hz -> 6000
- *     59.94 Hz -> 5994
- */
+/* Return the measured frequency multiplied by 100. */
 static long calculate_hz_x100(long elapsed_cs)
 {
-    if (elapsed_cs <= 0) {
-        return 0;
-    }
+  if (elapsed_cs <= 0) {
+    return 0;
+  }
 
-    /*
-     * frequency =
-     *
-     *     frames
-     * -----------------
-     * elapsed_cs / 100
-     *
-     *
-     * Hz * 100 =
-     *
-     * frames * 10000
-     * ----------------
-     * elapsed_cs
-     *
-     * Add elapsed_cs / 2 for rounding.
-     */
-    return
-        ((long)MEASURE_FRAMES * 10000L
-         + elapsed_cs / 2)
-        / elapsed_cs;
+  return ((long)MEASURE_FRAMES * 10000L + elapsed_cs / 2)
+    / elapsed_cs;
 }
 
-
-/* ============================================================
- * Measurement result
- * ============================================================ */
 
 static void show_result(long elapsed_cs)
 {
-    char buf[64];
+  char buf[64];
+  long sec;
+  long cs;
+  long hz_x100;
 
-    long sec;
-    long cs;
+  sec = elapsed_cs / 100;
+  cs = elapsed_cs % 100;
+  hz_x100 = calculate_hz_x100(elapsed_cs);
 
-    long hz_x100;
+  sprintf(
+    buf,
+    "600 V-DISP : %ld.%02ld sec",
+    sec,
+    cs);
+  put_line(3, buf);
 
-    sec = elapsed_cs / 100;
-    cs  = elapsed_cs % 100;
+  sprintf(
+    buf,
+    "Measured   : %ld.%02ld Hz",
+    hz_x100 / 100,
+    hz_x100 % 100);
+  put_line(4, buf);
 
-    hz_x100 =
-        calculate_hz_x100(elapsed_cs);
-
-
-    sprintf(
-        buf,
-        "600 V-DISP : %ld.%02ld sec",
-        sec,
-        cs);
-
-    put_line(3, buf);
-
-
-    sprintf(
-        buf,
-        "Measured   : %ld.%02ld Hz",
-        hz_x100 / 100,
-        hz_x100 % 100);
-
-    put_line(4, buf);
-
-
-    put_line(
-        5,
-        "Target     : 60.00 Hz");
-
-
-    put_line(
-        7,
-        "ESC : exit");
+  put_line(5, "Target     : 60.00 Hz");
+  put_line(7, "ESC : exit");
 }
 
 
-/* ============================================================
- * Main
- * ============================================================ */
-
 int main(void)
 {
-    int old_mode;
-
-    int frame;
-
-    int aborted;
-
-    struct iocs_time start_time;
-    struct iocs_time end_time;
-    struct iocs_time fps_time;
-    struct iocs_time now_time;
-
-    int fps_count;
-    long fps_elapsed_cs;
-    int flow_prev_y;
-    int flow_step;
-    long last_fps_x100;
-
-    long elapsed_cs;
-    long hz_x100;
-
-    char buf[64];
-
-
-    /* --------------------------------------------------------
-     * Save current IOCS screen mode
-     * -------------------------------------------------------- */
-
-    old_mode = _iocs_crtmod(-1);
-
-    hide_console_cursor();
-
-
-    /* --------------------------------------------------------
-     * IOCS mode 12
-     *
-     * 512 x 512
-     * 65536 colors
-     * 31 kHz
-     * -------------------------------------------------------- */
-
-    _iocs_crtmod(12);
-
-    _iocs_g_clr_on();
-
-
-    /* --------------------------------------------------------
-     * Save standard vertical timing
-     * -------------------------------------------------------- */
-
-    save_crtc_vertical();
-
-
-    /* --------------------------------------------------------
-    * Change to 525-line timing
-     * -------------------------------------------------------- */
-
-    aborted = 0;
-
-    if (set_60hz() != 0) {
-        aborted = 1;
-        put_line(
-            3,
-            "V-DISP timeout at 60Hz setup");
-    }
-
-
-    /* --------------------------------------------------------
-     * Initial screen
-     * -------------------------------------------------------- */
-
-    put_line(
-        1,
-        "X68000 60 Hz V-DISP measurement");
-
-    put_line(
-        3,
-        "Measuring 600 frames...");
-
-    put_line(
-        4,
-        "Progress   : 0 / 600");
-
-    put_line(
-        5,
-        "FPS   : --");
-
-    put_line(
-        7,
-        "ESC : abort");
-
-
-    /* --------------------------------------------------------
-     * Animation state
-     * -------------------------------------------------------- */
-
-    fps_count = 0;
-    flow_step = 0;
-    flow_prev_y = -1;
-    last_fps_x100 = -1;
-
-    elapsed_cs = 0;
-
-
-    /*
-     * Synchronize measurement start
-     *
-     * First wait for a frame boundary.
-     */
-
-    if (!aborted) {
-        if (wait_vdisp() != 0) {
-            aborted = 1;
-            put_line(
-                3,
-                "V-DISP timeout at start");
-        } else {
-            /*
-             * Read IOCS uptime immediately after the boundary.
-             */
-            start_time = _iocs_ontime();
-            fps_time = start_time;
-        }
-    }
-
-
-    /* ========================================================
-     * Measure exactly 600 frame periods
-     * ======================================================== */
-
-    for (frame = 1;
-         (frame <= MEASURE_FRAMES) && (aborted == 0);
-         ++frame) {
-
-        /*
-         * Wait for next frame.
-         */
-        if (wait_vdisp() != 0) {
-            aborted = 1;
-            put_line(
-                7,
-                "V-DISP timeout during measurement");
-            break;
-        }
-
-
-        /*
-         * Check ESC before drawing.  No new flow line is rendered
-         * on the frame used to leave the measurement loop.
-         */
-        if (escape_pressed()) {
-            aborted = 1;
-            break;
-        }
-
-
-        /*
-         * At frame #600, capture the end time
-         * immediately after V-DISP.
-         *
-         * Do this before drawing the final frame so
-         * rendering time after the edge is not included.
-         */
-        if (frame == MEASURE_FRAMES) {
-
-            end_time = _iocs_ontime();
-        }
-
-
-        /*
-         * Flow line:
-         * - Draw at about 30Hz (one update every 2 frames).
-         * - 30 updates per sweep => about 1 second at 60Hz.
-         */
-        if ((frame % FLOW_UPDATE_EVERY_FRAMES) == 0) {
-            int flow_phase;
-            int flow_y;
-
-            ++flow_step;
-
-            flow_phase = flow_step % FLOW_SWEEP_STEPS;
-            flow_y = (flow_phase * SCREEN_HEIGHT) / FLOW_SWEEP_STEPS;
-
-            if (flow_prev_y >= 0 && flow_prev_y != flow_y) {
-                fill_rect(
-                    0,
-                    flow_prev_y,
-                    SCREEN_WIDTH,
-                    FLOW_LINE_HEIGHT,
-                    COLOR_BLACK);
-            }
-
-            fill_rect(
-                0,
-                flow_y,
-                SCREEN_WIDTH,
-                FLOW_LINE_HEIGHT,
-                COLOR_WHITE);
-
-            flow_prev_y = flow_y;
-        }
-
-
-        /*
-         * FPS text update every 0.2 second.
-         */
-        now_time = _iocs_ontime();
-        ++fps_count;
-
-        fps_elapsed_cs = ontime_diff_cs(fps_time, now_time);
-
-        if (fps_elapsed_cs >= FPS_UPDATE_INTERVAL_CS) {
-
-            long fps_x100;
-
-            fps_x100 =
-                ((long)fps_count * 10000L + fps_elapsed_cs / 2L)
-                / fps_elapsed_cs;
-
-            if (fps_x100 != last_fps_x100) {
-                sprintf(
-                    buf,
-                    "FPS : %ld.%02ld",
-                    fps_x100 / 100,
-                    fps_x100 % 100);
-
-                put_line(
-                    5,
-                    buf);
-
-                last_fps_x100 = fps_x100;
-            }
-
-            fps_time = now_time;
-            fps_count = 0;
-        }
-
-
-        /* ----------------------------------------------------
-         * Progress display
-         *
-         * Update only once every 60 frames.
-         * ---------------------------------------------------- */
-
-        if ((frame % 60) == 0) {
-
-            sprintf(
-                buf,
-                "Progress   : %d / 600",
-                frame);
-
-            put_line(
-                4,
-                buf);
-        }
-
-
-    }
-
-
-    /*
-     * The animation ends with the measurement.  Remove its final
-     * flow line before displaying the result screen, then allow one
-     * V-DISP boundary for the cleared line to become visible.
-     */
-    if (flow_prev_y >= 0) {
-        fill_rect(
-            0,
-            flow_prev_y,
-            SCREEN_WIDTH,
-            FLOW_LINE_HEIGHT,
-            COLOR_BLACK);
-
-        flow_prev_y = -1;
-        (void)wait_vdisp();
-    }
-
-
-    /* ========================================================
-     * Result
-     * ======================================================== */
-
-    if (!aborted) {
-
-        elapsed_cs =
-            ontime_diff_cs(
-                start_time,
-                end_time);
-
-
-        show_result(
-            elapsed_cs);
-
-
-        /*
-         * Keep result visible until ESC.
-         */
-        for (;;) {
-
-            if (wait_vdisp() != 0) {
-                break;
-            }
-
-            if (escape_pressed()) {
-                break;
-            }
-        }
-    }
-
-
-    /* ========================================================
-     * Restore original video state
-     * ======================================================== */
-
-    /*
-     * Remove the flow line explicitly, then clear the complete test
-     * graphics screen.  XM6 TypeG and XEiJ may not expose the clear
-     * result before an immediate CRTC/mode change, so keep the test
-     * timing active until one more V-DISP boundary has passed.
-     */
-    if (flow_prev_y >= 0) {
-        fill_rect(
-            0,
-            flow_prev_y,
-            SCREEN_WIDTH,
-            FLOW_LINE_HEIGHT,
-            COLOR_BLACK);
-    }
-
-    _iocs_g_clr_on();
-
-    /* Always continue with restoration if synchronization times out. */
-    (void)wait_vdisp();
-
-    restore_mode_and_crtc(old_mode);
-
-    restore_console_cursor();
-
-
-    /* ========================================================
-     * Print result to Human68k console
-     * ======================================================== */
-
-    if (!aborted) {
-
-        hz_x100 =
-            calculate_hz_x100(
-                elapsed_cs);
-
-
-        printf(
-            "600 V-DISP = %ld.%02ld sec\n",
-            elapsed_cs / 100,
-            elapsed_cs % 100);
-
-
-        printf(
-            "Measured refresh = %ld.%02ld Hz\n",
-            hz_x100 / 100,
-            hz_x100 % 100);
-
+  int old_mode;
+  int frame;
+  int aborted;
+
+  struct iocs_time start_time;
+  struct iocs_time end_time;
+  struct iocs_time fps_time;
+  struct iocs_time now_time;
+
+  int fps_count;
+  long fps_elapsed_cs;
+  int flow_prev_y;
+  int flow_step;
+  long last_fps_x100;
+
+  long elapsed_cs;
+  long hz_x100;
+
+  char buf[64];
+
+  old_mode = _iocs_crtmod(-1);
+  hide_console_cursor();
+
+  /* Start from the standard 512 x 512, 65536-color, 31 kHz mode. */
+  _iocs_crtmod(12);
+  _iocs_g_clr_on();
+
+  save_crtc_vertical();
+
+  aborted = 0;
+
+  if (set_60hz() != 0) {
+    aborted = 1;
+    put_line(3, "V-DISP timeout at 60Hz setup");
+  }
+
+  put_line(1, "X68000 60 Hz V-DISP measurement");
+  put_line(3, "Measuring 600 frames...");
+  put_line(4, "Progress   : 0 / 600");
+  put_line(5, "FPS   : --");
+  put_line(7, "ESC : abort");
+
+  fps_count = 0;
+  flow_step = 0;
+  flow_prev_y = -1;
+  last_fps_x100 = -1;
+  elapsed_cs = 0;
+
+  /* Start timing immediately after a V-DISP boundary. */
+  if (!aborted) {
+    if (wait_vdisp() != 0) {
+      aborted = 1;
+      put_line(3, "V-DISP timeout at start");
     } else {
+      start_time = _iocs_ontime();
+      fps_time = start_time;
+    }
+  }
 
-        printf(
-            "Measurement aborted.\n");
+  for (frame = 1;
+       (frame <= MEASURE_FRAMES) && (aborted == 0);
+       ++frame) {
+    if (wait_vdisp() != 0) {
+      aborted = 1;
+      put_line(7, "V-DISP timeout during measurement");
+      break;
     }
 
+    /* Check ESC before drawing the next frame. */
+    if (escape_pressed()) {
+      aborted = 1;
+      break;
+    }
 
-    return 0;
+    /* Capture frame 600 before doing its drawing work. */
+    if (frame == MEASURE_FRAMES) {
+      end_time = _iocs_ontime();
+    }
+
+    if ((frame % FLOW_UPDATE_EVERY_FRAMES) == 0) {
+      int flow_phase;
+      int flow_y;
+
+      ++flow_step;
+      flow_phase = flow_step % FLOW_SWEEP_STEPS;
+      flow_y = (flow_phase * SCREEN_HEIGHT) / FLOW_SWEEP_STEPS;
+
+      if (flow_prev_y >= 0 && flow_prev_y != flow_y) {
+        fill_rect(
+          0,
+          flow_prev_y,
+          SCREEN_WIDTH,
+          FLOW_LINE_HEIGHT,
+          COLOR_BLACK);
+      }
+
+      fill_rect(
+        0,
+        flow_y,
+        SCREEN_WIDTH,
+        FLOW_LINE_HEIGHT,
+        COLOR_WHITE);
+
+      flow_prev_y = flow_y;
+    }
+
+    now_time = _iocs_ontime();
+    ++fps_count;
+    fps_elapsed_cs = ontime_diff_cs(fps_time, now_time);
+
+    if (fps_elapsed_cs >= FPS_UPDATE_INTERVAL_CS) {
+      long fps_x100;
+
+      fps_x100 =
+        ((long)fps_count * 10000L + fps_elapsed_cs / 2L)
+        / fps_elapsed_cs;
+
+      if (fps_x100 != last_fps_x100) {
+        sprintf(
+          buf,
+          "FPS : %ld.%02ld",
+          fps_x100 / 100,
+          fps_x100 % 100);
+        put_line(5, buf);
+        last_fps_x100 = fps_x100;
+      }
+
+      fps_time = now_time;
+      fps_count = 0;
+    }
+
+    if ((frame % 60) == 0) {
+      sprintf(buf, "Progress   : %d / 600", frame);
+      put_line(4, buf);
+    }
+  }
+
+  /* Remove the animation before displaying the result. */
+  if (flow_prev_y >= 0) {
+    fill_rect(
+      0,
+      flow_prev_y,
+      SCREEN_WIDTH,
+      FLOW_LINE_HEIGHT,
+      COLOR_BLACK);
+
+    flow_prev_y = -1;
+    (void)wait_vdisp();
+  }
+
+  if (!aborted) {
+    elapsed_cs = ontime_diff_cs(start_time, end_time);
+    show_result(elapsed_cs);
+
+    while (1) {
+      if (wait_vdisp() != 0) {
+        break;
+      }
+
+      if (escape_pressed()) {
+        break;
+      }
+    }
+  }
+
+  /* Let emulators display the cleared frame before restoring CRTC. */
+  if (flow_prev_y >= 0) {
+    fill_rect(
+      0,
+      flow_prev_y,
+      SCREEN_WIDTH,
+      FLOW_LINE_HEIGHT,
+      COLOR_BLACK);
+  }
+
+  _iocs_g_clr_on();
+  (void)wait_vdisp();
+
+  restore_mode_and_crtc(old_mode);
+  restore_console_cursor();
+
+  if (!aborted) {
+    hz_x100 = calculate_hz_x100(elapsed_cs);
+
+    printf(
+      "600 V-DISP = %ld.%02ld sec\n",
+      elapsed_cs / 100,
+      elapsed_cs % 100);
+
+    printf(
+      "Measured refresh = %ld.%02ld Hz\n",
+      hz_x100 / 100,
+      hz_x100 % 100);
+  } else {
+    printf("Measurement aborted.\n");
+  }
+
+  return 0;
 }

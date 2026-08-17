@@ -48,7 +48,7 @@ HUMAN_URL := http://retropc.net/x68000/software/sharp/human302/HUMN302I.LZH
 #
 # Pin xdftool.py to a known revision for reproducible builds.
 #
-XDFTOOL_URL := https://raw.githubusercontent.com/yunkya2/x68kmisc/08f647bad280dc8eac778f3f98358350d10e9471/xdftool/xdftool.py
+XDFTOOL_URL := https://cdn.jsdelivr.net/gh/yunkya2/x68kmisc@08f647bad280dc8eac778f3f98358350d10e9471/xdftool/xdftool.py
 
 
 .PHONY: all clean distclean check-xdf check-tools
