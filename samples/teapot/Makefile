@@ -133,7 +133,7 @@ $(HUMAN_LZH): | $(BUILD_DIR)
 #
 # File contents are NOT converted.
 #
-$(HUMAN_EXTRACT_STAMP): $(HUMAN_LZH) Makefile
+$(HUMAN_EXTRACT_STAMP): $(HUMAN_LZH) Makefile ../../scripts/restore_lzh_timestamps.py
 	rm -rf $(HUMAN_EXTRACT_DIR)
 	mkdir -p $(HUMAN_EXTRACT_DIR)
 
@@ -144,8 +144,8 @@ $(HUMAN_EXTRACT_STAMP): $(HUMAN_LZH) Makefile
 		-o $(HUMAN_EXTRACT_DIR) \
 		$(HUMAN_LZH)
 
-	# Normalize dates: unar reports invalid far-future timestamps for this LZH.
-	find $(HUMAN_EXTRACT_DIR) -type f -exec touch -m -r "$(HUMAN_LZH)" {} +
+	# Restore the original LZH dates without the unar FILETIME word-order bug.
+	$(PYTHON) ../../scripts/restore_lzh_timestamps.py "$(HUMAN_LZH)" "$(HUMAN_EXTRACT_DIR)"
 
 	@src="$$(find $(HUMAN_EXTRACT_DIR) \
 		-maxdepth 1 \
