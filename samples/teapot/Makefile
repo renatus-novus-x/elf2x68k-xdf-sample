@@ -133,7 +133,7 @@ $(HUMAN_LZH): | $(BUILD_DIR)
 #
 # File contents are NOT converted.
 #
-$(HUMAN_EXTRACT_STAMP): $(HUMAN_LZH)
+$(HUMAN_EXTRACT_STAMP): $(HUMAN_LZH) Makefile
 	rm -rf $(HUMAN_EXTRACT_DIR)
 	mkdir -p $(HUMAN_EXTRACT_DIR)
 
@@ -143,6 +143,9 @@ $(HUMAN_EXTRACT_STAMP): $(HUMAN_LZH)
 		-f \
 		-o $(HUMAN_EXTRACT_DIR) \
 		$(HUMAN_LZH)
+
+	# Normalize dates: unar reports invalid far-future timestamps for this LZH.
+	find $(HUMAN_EXTRACT_DIR) -type f -exec touch -m -r "$(HUMAN_LZH)" {} +
 
 	@src="$$(find $(HUMAN_EXTRACT_DIR) \
 		-maxdepth 1 \
